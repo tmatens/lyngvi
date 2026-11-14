@@ -1,0 +1,18 @@
+# lyngvi-firewall-refresh.service — what the daily timer runs. A separate unit from
+# lyngvi-firewall.service on purpose: that one is RemainAfterExit=yes so the agent
+# unit can Requires=/After= it, and `start` on an active RemainAfterExit unit is a
+# no-op, so a timer pointed at it would never re-run the script. This unit has no
+# RemainAfterExit and nothing depends on it, so every trigger runs the script and
+# nothing propagates to the agent unit. Same script, same values.
+[Unit]
+Description=Re-apply the lyngvi egress firewall (timer target; CDN/GitHub CIDR rotation)
+Documentation=https://github.com/tmatens/lyngvi/blob/main/host/HOST_SETUP.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/sbin:/sbin:/usr/bin:/bin
+EnvironmentFile=/etc/lyngvi/firewall.conf
+ExecStart=/usr/local/sbin/lyngvi-firewall.sh

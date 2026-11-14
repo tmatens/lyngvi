@@ -1,0 +1,20 @@
+# lyngvi-agent.service — starts the agent container ONLY after the egress
+# firewall has been applied, so the agent never has a fail-open window on boot
+# or a docker restart. The compose file sets `restart: "no"` for exactly this
+# reason. Install path + ordering rationale: HOST_SETUP.md.
+[Unit]
+Description=Start the lyngvi agent only after the egress firewall is applied
+Requires=lyngvi-firewall.service docker.service
+After=lyngvi-firewall.service docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Container name from docker-compose.yml (container_name). An overlay that keeps
+# a different name edits this one line in its installed copy.
+ExecStart=/usr/bin/docker start lyngvi
+ExecStop=/usr/bin/docker stop lyngvi
+
+[Install]
+WantedBy=multi-user.target docker.service

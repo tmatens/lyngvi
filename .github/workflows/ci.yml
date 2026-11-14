@@ -167,11 +167,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
       - name: install the host side with v0.4.0's installer
+        # v0.4.0 has no tag in this repository, so its installer is kept as a fixture.
         run: |
-          mkdir -p /tmp/v040 && git archive v0.4.0 host site-example | tar -x -C /tmp/v040
+          mkdir -p /tmp/v040 && cp -a host/testdata/v0.4.0/. /tmp/v040/
           docker run -d --name my-station alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a sleep infinity
           sudo /tmp/v040/host/install.sh --site /tmp/v040/site-example --container my-station
           sudo systemctl start lyngvi-agent.service
@@ -215,13 +214,20 @@ jobs:
         with:
           fetch-depth: 0 # the previous release tag
       - name: boot the previous release
+        id: prev
+        # Before the first tag in this repository there is no release to upgrade from.
         run: |
-          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^)
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null) || {
+            echo "no earlier release tag: nothing to upgrade from"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
           echo "previous release: $prev"
           mkdir -p /tmp/prev && git archive "$prev" | tar -x -C /tmp/prev
           (cd /tmp/prev && docker compose build -q && KEEP=1 scripts/smoke.sh)
           docker exec lyngvi sh -c 'echo upgrade-marker > "$HOME/.claude/upgrade-marker"'
       - name: upgrade in place to this commit
+        if: steps.prev.outputs.skip != '1'
         # A real site keeps its secrets across an upgrade; the smoke test removed its
         # throwaway file, so write a fresh throwaway key the same way it does.
         run: |
