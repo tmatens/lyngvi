@@ -1,0 +1,58 @@
+# Example overlay: how a private deployment repo consumes lyngvi unchanged.
+# Layout of the overlay repo (docs/OVERLAY.md):
+#   upstream/              git submodule → github.com/tmatens/lyngvi @ vX.Y.Z
+#   compose.override.yml   this file
+#   site/                  site.conf, CLAUDE.md, known_hosts, settings.json,
+#                          gitconfig, proxy-filter.extra, proxy-tinyproxy.extra
+#   .env                   secrets, produced on the host (never committed)
+# Run with:  docker compose -f upstream/docker-compose.yml -f compose.override.yml up -d --build
+# (or copy upstream/docker-compose.yml next to this file so Compose auto-merges
+# the override).
+services:
+  lyngvi:
+    build:
+      context: ./upstream
+      additional_contexts:
+        site: ./site                 # replaces site-example/
+      args:
+        WITH_GO: "1"                 # the site's repos need Go
+        WITH_FORGEJO_MCP: "1"        # the site's forge is Forgejo
+    # `!override` REPLACES the upstream list; a plain list would be APPENDED to it
+    # (Compose merges env_file lists), loading the example values before yours.
+    env_file: !override
+      - path: ./site/site.conf       # replaces site-example/site.conf
+      - path: ./.env
+        required: false
+    networks:
+      - lyngvi-net
+      - lyngvi-proxy-net
+      - forge-net                    # site-added internal net to a co-hosted forge API
+  lyngvi-proxy:
+    build:
+      context: ./upstream
+      dockerfile: proxy/Dockerfile
+      additional_contexts:
+        site: ./site
+      args:
+        PROXY_PRESETS: "go"          # the Go module proxy, for WITH_GO "1" above
+networks:
+  # Override the subnets to the site's values. internal + the isolated gateway come
+  # from upstream and merge by name; do not redeclare them away.
+  lyngvi-net:
+    ipam:
+      config:
+        - subnet: 10.231.0.0/24
+  lyngvi-proxy-net:
+    ipam:
+      config:
+        - subnet: 10.231.1.0/24
+  lyngvi-proxy-out:
+    ipam:
+      config:
+        - subnet: 10.231.2.0/24
+  # Pre-created on the host, shared only with the forge container so the API is
+  # reachable without touching the host's reverse proxy. It must be created as
+  #   docker network create --internal -o com.docker.network.bridge.gateway_mode_ipv4=isolated forge-net
+  # or the agent gains a host address through it (doctor --live checks the bridge).
+  forge-net:
+    external: true

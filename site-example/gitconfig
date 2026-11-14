@@ -1,0 +1,15 @@
+# Site git config fragment, included globally by the entrypoint (include.path).
+# Typical use: a second identity for one checkout, selected by path, with its own
+# signing key loaded from SSH_KEY_<NAME>_B64 (→ ~/.ssh/<name>, .pub derived) and
+# its own HTTPS credential from GIT_HTTPS_CREDENTIAL_<NAME> (needs useHttpPath).
+#
+# [credential]
+#     useHttpPath = true
+# [includeIf "gitdir:~/workspace/some-repo/"]
+#     path = /etc/lyngvi/site/gitconfig-some-repo
+#
+# and in gitconfig-some-repo:
+# [user]
+#     name = some-bot
+#     email = 12345+some-bot@users.noreply.github.com
+#     signingkey = /home/claude/.ssh/some_bot.pub

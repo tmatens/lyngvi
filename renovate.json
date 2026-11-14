@@ -1,0 +1,198 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "description": "Every bump merges itself once its PR is green and the release has aged three days; the packageRules below are the exceptions. The repo-wide default carries the policy so that a shape nobody has named yet merges under the same terms as everything else instead of waiting for a person by accident. What makes the default safe is enforced outside this file: main's ruleset requires the `ci` and `leak-check` checks from GitHub Actions and nothing else (no reviews, no bypass actors), and `ci` builds both image variants, runs scripts/smoke.sh against the built image, and the linters, so a green PR has exercised the bump. Majors wait seven days (their x.0.1 usually lands in the first week). platformAutomerge is false so GitHub's native auto-merge, which knows nothing of the age, cannot route around it. Labels: `renovate` on every PR, `manual-merge` only where a rule below says a person decides, `security` on advisory PRs; so an open Renovate PR with no other label is green-and-waiting or red, never forgotten. CONTRIBUTING.md 'Dependency updates' is the human-readable table of the same policy; change both together.",
+  "schedule": [
+    "before 4am on monday"
+  ],
+  "automergeSchedule": [
+    "at any time"
+  ],
+  "automerge": true,
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "minimumReleaseAge": "3 days",
+  "addLabels": [
+    "renovate"
+  ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "description": "A security PR opens the moment an advisory lands instead of waiting for Monday, and skips the age. Whether it then merges itself is decided by the same rules as any other update.",
+    "addLabels": [
+      "security"
+    ]
+  },
+  "github-actions": {
+    "description": "Also the overlay template's workflow under templates/overlay/: its action pins must move with ours, and the manager's default patterns are anchored at the repo root.",
+    "managerFilePatterns": [
+      "/(^|/)(workflow-templates|\\.(?:github|gitea|forgejo)/(?:workflows|actions))/.+\\.ya?ml$/",
+      "/(^|/)action\\.ya?ml$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "GitHub Actions: SHA-pin every uses: with a version comment, one weekly PR.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true,
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Runtime base images (the agent's node image, the proxy's alpine) bypass the weekly schedule: their rebuilds carry CVE patches that cannot be applied inside the image, so the bump PR opens same-day and merges under the defaults.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "node",
+        "docker.io/library/node",
+        "alpine",
+        "docker.io/library/alpine"
+      ],
+      "schedule": [
+        "at any time"
+      ]
+    },
+    {
+      "description": "Majors wait seven days instead of three. Applies to every manager, including the node base image moving to a new release line.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Claude Code CLI is the agent itself. Patch and minor bumps merge under the defaults because `ci` boots the new CLI to its supervisor loop on the PR (scripts/smoke.sh) and the station's Remote Control floor is version-gated in entrypoint.sh. A major is a person's call: it can change the settings schema, the hook protocol, or the login flow, none of which the smoke proves.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "@anthropic-ai/claude-code"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "labels": [
+        "manual-merge"
+      ]
+    },
+    {
+      "description": "Go toolchain and golangci-lint move together: golangci-lint must be built with a Go at least as new as the baked toolchain to parse the code, so a release line change in either waits for the other in one group and for seven days. The PR builds the WITH_GO=1 variant, which copies both binaries and runs `go version`. A site that must keep the toolchain in lockstep with a go.mod pins the upstream submodule commit instead.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "golang",
+        "docker.io/library/golang",
+        "golangci/golangci-lint",
+        "docker.io/golangci/golangci-lint"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "groupName": "go-toolchain",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "forgejo-mcp is built from source at a pinned commit and runs with the forge token: a bump is a diff to read, not a release to age, so a person merges it.",
+      "matchDepNames": [
+        "https://codeberg.org/ric_harvey/forgejo-mcp"
+      ],
+      "automerge": false,
+      "labels": [
+        "manual-merge"
+      ]
+    },
+    {
+      "description": "The token relay's Caddy (relay/Dockerfile) holds the GitHub and forge tokens and decides which API paths the agent may reach: like the MCP servers that run with a token, a bump is a release to read, so a person merges it.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "caddy",
+        "docker.io/library/caddy"
+      ],
+      "automerge": false,
+      "labels": [
+        "manual-merge"
+      ]
+    },
+    {
+      "description": "GitHub's MCP server runs with the GitHub token, so a bump is a release to read, not one to age: a person merges it. ghcr.io gives Renovate no release timestamp, so the age is lifted (as for gitleaks) or the PR would never open; the PR runs scripts/check-github-mcp.sh against the new binary.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "automerge": false,
+      "labels": [
+        "manual-merge"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "ghcr.io digests (gitleaks) carry no release timestamp in Renovate's docker datasource, so under the default timestamp-required behaviour a three-day age would leave them pending forever and never open a PR. The age is lifted for this one image: the PR runs the hook test suite against the exact digest it proposes, and that is the review.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/gitleaks/gitleaks"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Workaround for renovatebot/renovate#45236: the branch stage re-checks the age from a timestamp only version updates carry, and under timestamp-required marks digest/pin updates pending forever so automerge never fires. The three-day age is still enforced at lookup for every image that has a timestamp. Remove once the upstream fix ships.",
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest",
+        "pin",
+        "lockFileMaintenance"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the Claude Code CLI pinned as a Dockerfile ARG (no stock manager reads ARG): the line above the ARG carries '# renovate: datasource=npm depName=@anthropic-ai/claude-code'",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>npm) depName=(?<depName>\\S+)\\s*\\nARG \\w+=(?<currentValue>[^\\s\"']+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Images that CI runs with `docker run/create <image>:<tag>@sha256:<digest>` in workflow run: steps (the same pinned linters the Dockerfile bakes). Invisible to the github-actions manager, so track them here with the docker datasource.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/",
+        "/^scripts/.*\\.sh$/"
+      ],
+      "matchStrings": [
+        "docker (?:run|create|pull)(?:[^\\n]|\\\\\\n)*?\\s(?<depName>[a-z0-9][a-z0-9./-]*?):(?<currentValue>v?[0-9][A-Za-z0-9.-]*)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "The forgejo-mcp server is built from source at a pinned commit (the hash is the supply-chain checksum). Track the upstream default branch head so a bump is a reviewed PR with a diff to read, never a silent float.",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+)\\s*\\nARG \\w+=(?<currentDigest>[a-f0-9]{40})"
+      ],
+      "currentValueTemplate": "main"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# github-mcp launcher (optional GitHub adapter, baked when WITH_GITHUB_MCP=1) —
+# maps the container's GitHub token onto the server's expected env and applies
+# lyngvi's defaults. Token stays env-only (never argv/disk).
+# Server: github/github-mcp-server, the official image pinned by digest in the Dockerfile.
+#
+# Defaults, each overridable from site.conf (unset = this default, set = the site's
+# value, empty = the server's own default):
+#   GITHUB_TOOLSETS      context,repos,issues,pull_requests: the server's default
+#                        minus `copilot`, which hands work to GitHub's own coding
+#                        agent, running on GitHub's machines outside the egress
+#                        proxy, and `users`. Add `actions` to read CI runs and logs.
+#   GITHUB_EXCLUDE_TOOLS push_files, create_or_update_file, delete_file: they write
+#                        commits through the API, which skips the agent's own
+#                        signing key and DCO hook (GitHub signs them instead), and
+#                        create_repository, which is not agent work here.
+# The token's permissions stay the real control: the agent can reach the API
+# without this server.
+set -eu
+
+# In a lyngvi stack the token is in the token relay (relay/start.sh), never here: the
+# server is pointed at the relay as if it were a GitHub Enterprise host (it then calls
+# <relay>/api/v3/…), and the relay adds the token on the way to api.github.com.
+# The server takes a plain-HTTP host only on loopback, so it gets the entrypoint's
+# loopback forwarder to the relay (agent/loopback.mjs).
+if [ -n "${LYNGVI_RELAY_GITHUB_LOCAL:-}" ]; then
+  export GITHUB_HOST="$LYNGVI_RELAY_GITHUB_LOCAL"
+  export GITHUB_PERSONAL_ACCESS_TOKEN="added-by-the-lyngvi-relay"
+else
+  : "${GITHUB_TOKEN:?no relay route (LYNGVI_RELAY_GITHUB) and no GITHUB_TOKEN — cannot start github-mcp}"
+  export GITHUB_PERSONAL_ACCESS_TOKEN="$GITHUB_TOKEN"
+fi
+export GITHUB_TOOLSETS="${GITHUB_TOOLSETS-context,repos,issues,pull_requests}"
+export GITHUB_EXCLUDE_TOOLS="${GITHUB_EXCLUDE_TOOLS-push_files,create_or_update_file,delete_file,create_repository}"
+exec /usr/local/bin/github-mcp-server stdio

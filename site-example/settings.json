@@ -1,0 +1,3 @@
+{
+  "_comment": "Merged into the image's MANAGED settings (/etc/claude-code/managed-settings.json) at build, on top of the upstream base (hooks, MCP allowlist, no bypass mode, git commit/push grants). Arrays are unioned; keys starting with _ are dropped. Put site grants here, e.g. an exact-command Bash allow for a committed helper script, so they are human-merged image changes the agent cannot override. An MCP server the site adds needs its launcher in allowedMcpServers ({\"serverCommand\": [\"/path\"]}). Set allowManagedPermissionRulesOnly: true to ignore permission rules from the workspace (DESIGN.md \u00a74.5). Tool-call telemetry (opt-in, docs/AUDIT.md): an \"env\" with OTEL_EXPORTER_OTLP_ENDPOINT turns it on in managed settings, tool parameters only."
+}

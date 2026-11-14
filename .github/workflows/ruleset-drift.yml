@@ -1,0 +1,80 @@
+name: ruleset-drift
+
+# The rulesets are the deploy control, so every one is committed under
+# .github/rulesets/ and compared against the live ruleset of the same name weekly
+# (and on demand). UI drift fails this job. Not a required check (it does not run
+# on PRs), so a first push cannot go red on it.
+#
+# The second step guards the other half of the control: with zero required reviews
+# and no bypass actors, what stops a contributor (the bot included) from merging is
+# that nobody but the owner holds write. A grant made in the UI is caught here the
+# following Monday.
+#
+# The ruleset comparison needs RULESET_DRIFT_TOKEN: GitHub returns `bypass_actors`
+# only to callers with admin rights, and the job token has none — with it, every live
+# ruleset reads as "no bypass actors", which is exactly the drift this job exists to
+# catch. The token is the owner's fine-grained PAT scoped to this repository with
+# Administration: read-only (see CONTRIBUTING.md). A missing or expired token fails
+# the job on purpose: a blind drift check is not a control.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: compare .github/rulesets/*.json with the live rulesets of the same name
+        env:
+          GH_TOKEN: ${{ secrets.RULESET_DRIFT_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "RULESET_DRIFT_TOKEN is not set: bypass actors are invisible without admin read, so this check cannot run (see CONTRIBUTING.md)"; exit 1; }
+          python3 -I - <<'PY'
+          import glob, json, os, subprocess, sys
+          repo = os.environ["GITHUB_REPOSITORY"]
+          lst = json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/rulesets"]))
+          def norm(r):
+              return {"target": r.get("target", "branch"),
+                      "enforcement": r["enforcement"],
+                      "bypass_actors": sorted((a["actor_type"], a.get("actor_id"), a.get("bypass_mode")) for a in r.get("bypass_actors", [])),
+                      "conditions": r["conditions"],
+                      "rules": sorted(json.dumps({"type": x["type"], "parameters": x.get("parameters", {})}, sort_keys=True) for x in r["rules"])}
+          bad = 0
+          for path in sorted(glob.glob(".github/rulesets/*.json")):
+              want = json.load(open(path))
+              live = next((r for r in lst if r["name"] == want["name"]), None)
+              if not live:
+                  print(f"{path}: no live ruleset named {want['name']!r}"); bad += 1; continue
+              live = json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/rulesets/{live['id']}"]))
+              a, b = norm(want), norm(live)
+              if a != b:
+                  print(f"DRIFT between {path} and the live ruleset {want['name']!r}:")
+                  for k in a:
+                      if a[k] != b[k]:
+                          print(f"  {k}: file={a[k]}\n      live={b[k]}")
+                  bad += 1
+              else:
+                  print(f"{path}: ruleset matches")
+          sys.exit(1 if bad else 0)
+          PY
+      - name: no collaborator other than the owner has write
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I - <<'PY'
+          import json, os, subprocess, sys
+          repo = os.environ["GITHUB_REPOSITORY"]; owner = os.environ["GITHUB_REPOSITORY_OWNER"]
+          cols = json.loads(subprocess.check_output(["gh", "api", "--paginate", f"repos/{repo}/collaborators?affiliation=direct&per_page=100"]))
+          bad = [c["login"] for c in cols if c["login"] != owner and c["role_name"] not in ("read", "triage")]
+          for c in cols:
+              print(f"{c['login']}: {c['role_name']}")
+          if bad:
+              print(f"DRIFT: write or higher granted to {bad} — only the owner may hold write (see CONTRIBUTING.md: the fork model)"); sys.exit(1)
+          print("ok: no collaborator other than the owner has write")
+          PY

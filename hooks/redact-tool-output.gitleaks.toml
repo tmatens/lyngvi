@@ -1,0 +1,36 @@
+# gitleaks config for redact-tool-output.sh: the full default ruleset plus the
+# credential formats common in self-hosted deployments that gitleaks does not
+# ship a rule for. Checked against gitleaks 8.30.1.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "tailscale-key"
+description = "Tailscale auth / API / OAuth-client key"
+regex = '''\btskey-[a-z]+-[A-Za-z0-9]{6,}-[A-Za-z0-9]{16,}\b'''
+keywords = ["tskey-"]
+
+[[rules]]
+id = "balloon-password-hash"
+description = "Pi-hole v6 password hash (pwhash / app_pwhash): offline-crackable"
+regex = '''\$BALLOON-SHA256\$[^\s"']+'''
+keywords = ["balloon-sha256"]
+
+# The Claude Code OAuth credential (~/.claude/.credentials.json): the access token and
+# the refresh token of a claude.ai login. gitleaks ships a rule for Anthropic API keys
+# (sk-ant-api03-) but not for these, which are what a Remote Control host holds.
+[[rules]]
+id = "claude-oauth-token"
+description = "Claude Code OAuth access or refresh token"
+regex = '''\bsk-ant-(?:oat|ort)[0-9]{2}-[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-ant-oat", "sk-ant-ort"]
+
+# A PEM private key that has been base64-encoded whole, as a dotenv value carries one
+# (GIT_SSH_KEY_B64=...). The PEM rule cannot see it: the header is encoded too. The
+# alternatives are the encoded "-----BEGIN <TYPE> PRIVATE KEY---" for each type.
+[[rules]]
+id = "base64-private-key"
+description = "Base64-encoded PEM private key"
+regex = '''\bLS0tLS1CRUdJTi(?:BPUEVOU1NIIFBSSVZBVEUgS0VZLS0t|BQUklWQVRFIEtFWS0tLS0t|BSU0EgUFJJVkFURSBLRVktLS0t|BFQyBQUklWQVRFIEtFWS0tLS0t|BEU0EgUFJJVkFURSBLRVktLS0t|BFTkNSWVBURUQgUFJJVkFURSBLRVktLS0t)[A-Za-z0-9+/=]{40,}'''
+keywords = ["ls0tls1crudjti"]

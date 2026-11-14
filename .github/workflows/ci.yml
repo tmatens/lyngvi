@@ -1,0 +1,245 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN is read-only for every job (repo setting + this block).
+# No job needs a secret; fork PRs get the same CI as collaborator branches.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Private deployment details must never reach this repo. Hash-list + generic
+  # rules; output never contains the matched text. Required status check.
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # scans recent commit messages too
+      - run: python3 -I scripts/check-site-leaks.py
+      # Only what this change adds: the PR's commits and description, or a push's
+      # commits. Values reach the script through env, never the command line.
+      # A description edited after the last push is not re-checked.
+      - name: no AI attribution (commits, PR description)
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || (github.event_name == 'push' && format('{0}..{1}', github.event.before, github.sha) || '') }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 -I scripts/check-attribution.py --range "$RANGE" --body-env PR_BODY
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Same pinned images the Dockerfile bakes, so local == CI.
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d \
+            entrypoint.sh healthcheck.sh host/uninstall.sh hooks/skills-summary.sh agent/forgejo-mcp scripts/check-forge-mcp-areas.sh scripts/check-go-preset.sh scripts/refused-hosts.sh agent/github-mcp scripts/check-github-mcp.sh \
+            scripts/smoke.sh scripts/doctor.sh scripts/new-overlay.sh scripts/release-notes.sh \
+            proxy/start.sh keys/start.sh relay/start.sh scripts/injection-exercise/setup.sh scripts/injection-exercise/check.sh scripts/injection-exercise/file-issues.sh \
+            agent/git-hooks/_identity.sh agent/git-hooks/pre-commit agent/git-hooks/pre-merge-commit agent/git-hooks/commit-msg agent/git-hooks/prepare-commit-msg
+      - name: hadolint
+        run: |
+          docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < Dockerfile
+          docker run --rm -i hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d < proxy/Dockerfile
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color \
+            templates/overlay/.github/workflows/validate.yml .github/workflows/ci.yml .github/workflows/ruleset-drift.yml
+      - name: compose-lint
+        uses: tmatens/compose-lint@07041a0807805b1bb134c4c83efad61fe8abb7b5 # v1.2.0
+        with:
+          fail-on: low
+      - name: compose config renders (example values)
+        run: docker compose config --quiet
+      - name: doctor, static sections (the example site must pass its own preflight)
+        run: scripts/doctor.sh
+      - name: the gVisor override still fits the stack (renders, egress layout intact)
+        # docs/GVISOR.md; the runtime itself is not on the runner, so this checks the file
+        env:
+          COMPOSE_FILE: docker-compose.yml:examples/gvisor/compose.gvisor.yml
+        run: docker compose config --quiet && scripts/doctor.sh
+      - name: proxy allowlist grammar (every line a hostname pattern)
+        run: proxy/test-check-filter.sh
+      - name: notify unit tests (every delivery shape against a local server)
+        run: node agent/test-notify.mjs
+      - name: hook unit tests (gitleaks from the pinned image)
+        run: |
+          id=$(docker create ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f)
+          mkdir -p "$HOME/bin" && docker cp "$id:/usr/bin/gitleaks" "$HOME/bin/gitleaks" && docker rm "$id" >/dev/null
+          chmod +x "$HOME/bin/gitleaks"
+          GITLEAKS_DIR="$HOME/bin" python3 hooks/test-redact-tool-output.py
+          python3 hooks/test-block-secret-dumps.py
+          python3 hooks/test-config-change.py
+          python3 hooks/test-skills-summary.py
+          python3 scripts/test-git-hooks.py
+
+  # Build both images, in the default variant and with every gated toolchain on,
+  # so no gated layer can rot unnoticed — through bake, with a BuildKit cache in
+  # the Actions cache (.github/bake-ci.hcl), so unchanged layers are not rebuilt
+  # on every PR. Then the mechanical claims CI can prove, via the same smoke
+  # script that runs locally: supervisor loop reached with example values and a
+  # throwaway key, signing + DCO + host-key pinning, proxy default-deny by hostname.
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build (defaults + all toolchains, cached)
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
+        with:
+          source: .
+          files: |
+            docker-compose.yml
+            .github/bake-ci.hcl
+          targets: ci
+          load: true
+      - name: all-toolchains variant has what it claims
+        run: |
+          docker run --rm --entrypoint sh lyngvi-lyngvi:all -c \
+            'go version && golangci-lint version && test -f /opt/forgejo-mcp/dist/index.js && echo forgejo-mcp present && github-mcp-server --version'
+      - name: forgejo-mcp tool areas (default off, site override)
+        run: scripts/check-forge-mcp-areas.sh lyngvi-lyngvi:all
+      - name: the proxy's go preset (refused without it, a real download with it)
+        run: scripts/check-go-preset.sh lyngvi-lyngvi:all
+      - name: github-mcp default tools (no copilot, no API commits, site override)
+        run: scripts/check-github-mcp.sh lyngvi-lyngvi:all
+      - name: smoke (scripts/smoke.sh — same script locally and in CI)
+        run: KEEP=1 scripts/smoke.sh
+      - name: doctor, live section (what an operator runs after first start)
+        run: scripts/doctor.sh --live
+      - name: the layout survives a daemon restart (no apply step, so nothing to re-apply)
+        # restart: unless-stopped — the daemon itself brings both containers back, as
+        # created (with the smoke test's key, whose secrets file is gone by now). No
+        # operator action: doctor --live must find the same layout afterwards.
+        run: |
+          sudo systemctl restart docker
+          for _ in $(seq 1 30); do
+            [ "$(docker inspect --format '{{.State.Status}}' lyngvi)" = running ] && break; sleep 2
+          done
+          test "$(docker inspect --format '{{.State.Status}}' lyngvi)" = running
+          sleep 10
+          scripts/doctor.sh --live
+      - name: teardown
+        if: always()
+        run: docker compose down -v || true
+
+  # The overlay template, instantiated from this very checkout and put through what
+  # its own validate workflow would run: it renders, passes the doctor and compose-lint.
+  # So the template cannot drift from the compose semantics or the site files it
+  # depends on without this job going red.
+  overlay-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: scaffold an overlay from this checkout
+        run: scripts/new-overlay.sh .scaffold/my-station --upstream "$PWD" --ref "$(git rev-parse HEAD)"
+      - name: the overlay renders and passes the doctor
+        working-directory: .scaffold/my-station
+        run: |
+          docker compose config --quiet
+          upstream/scripts/doctor.sh
+          git status --short | grep -q '^A  compose.yaml' && git status --short | grep -q '^A  site/site.conf'
+          test "$(git submodule status upstream | cut -c1)" = " "
+      - name: compose-lint on the scaffolded stack
+        uses: tmatens/compose-lint@07041a0807805b1bb134c4c83efad61fe8abb7b5 # v1.2.0
+        with:
+          files: .scaffold/my-station/compose.yaml
+          config: .scaffold/my-station/.compose-lint.yml
+          fail-on: low
+
+  # The migration off the removed host path, for real, on the runner (a systemd host
+  # with Docker's iptables backend): install the host side with the LAST installer that
+  # shipped it (v0.4.0's, from its tag), stand a container in for the agent under its
+  # unit, then run host/uninstall.sh and require every piece gone and the container
+  # untouched. A second run proves it is idempotent.
+  host-uninstall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: install the host side with v0.4.0's installer
+        run: |
+          mkdir -p /tmp/v040 && git archive v0.4.0 host site-example | tar -x -C /tmp/v040
+          docker run -d --name my-station alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a sleep infinity
+          sudo /tmp/v040/host/install.sh --site /tmp/v040/site-example --container my-station
+          sudo systemctl start lyngvi-agent.service
+          systemctl is-active lyngvi-agent.service lyngvi-firewall.service lyngvi-firewall.timer
+          sudo iptables -C DOCKER-USER -s 172.31.240.0/24 -j LYNGVI_EGRESS
+      - name: doctor sees the leftovers
+        run: sudo scripts/doctor.sh 2>&1 | grep -q 'run upstream/host/uninstall.sh'
+      - name: uninstall removes every piece and leaves the container running
+        run: |
+          before=$(docker inspect --format '{{.State.StartedAt}}' my-station)
+          sudo host/uninstall.sh
+          test "$before" = "$(docker inspect --format '{{.State.StartedAt}}' my-station)" || { echo "container was stopped"; exit 1; }
+          test "$(docker inspect --format '{{.State.Status}}' my-station)" = running
+          for u in lyngvi-agent.service lyngvi-firewall.service lyngvi-firewall.timer lyngvi-firewall-refresh.service; do
+            test ! -e "/etc/systemd/system/$u" || { echo "$u still installed"; exit 1; }
+            if systemctl is-active --quiet "$u"; then echo "$u still active"; exit 1; fi
+          done
+          test ! -e /etc/systemd/system/lyngvi-agent.service.d
+          test ! -e /usr/local/sbin/lyngvi-firewall.sh && test ! -e /etc/lyngvi/firewall.conf
+          if sudo iptables -nL LYNGVI_EGRESS >/dev/null 2>&1; then echo "chain still present"; exit 1; fi
+          if sudo iptables -S DOCKER-USER | grep -q LYNGVI_EGRESS; then echo "DOCKER-USER jump still present"; exit 1; fi
+          for s in 172.31.240.0/24 172.31.241.0/24 172.31.242.0/24; do
+            if sudo iptables -C INPUT -s "$s" -j DROP 2>/dev/null; then echo "INPUT drop for $s still present"; exit 1; fi
+          done
+      - name: uninstall is idempotent, and doctor is quiet afterwards
+        run: |
+          sudo host/uninstall.sh
+          if sudo scripts/doctor.sh 2>&1 | grep -q 'run upstream/host/uninstall.sh'; then echo "doctor still sees leftovers"; exit 1; fi
+
+  # An upgrade in place, the way a site takes a release: boot the previous release with
+  # its own smoke test, write a marker into the login volume, then build this commit and
+  # `compose up` over it in the same project. The volume (where the OAuth login lives)
+  # must survive, the networks must be reused or recreated cleanly, and the live doctor
+  # must pass. Catches release-to-release breaks a fresh build never sees.
+  upgrade:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: lyngvi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the previous release tag
+      - name: boot the previous release
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^)
+          echo "previous release: $prev"
+          mkdir -p /tmp/prev && git archive "$prev" | tar -x -C /tmp/prev
+          (cd /tmp/prev && docker compose build -q && KEEP=1 scripts/smoke.sh)
+          docker exec lyngvi sh -c 'echo upgrade-marker > "$HOME/.claude/upgrade-marker"'
+      - name: upgrade in place to this commit
+        # A real site keeps its secrets across an upgrade; the smoke test removed its
+        # throwaway file, so write a fresh throwaway key the same way it does.
+        run: |
+          k=$(mktemp -d) && ssh-keygen -q -t ed25519 -N '' -C 'upgrade throwaway' -f "$k/key"
+          ( umask 077; printf 'GIT_SSH_KEY_B64=%s\n' "$(base64 -w0 < "$k/key")" > .env ) && rm -rf "$k"
+          docker compose build -q
+          docker compose up -d
+          for _ in $(seq 1 30); do
+            [ "$(docker inspect --format '{{.State.Status}}' lyngvi)" = running ] && break; sleep 2
+          done
+          test "$(docker exec lyngvi cat /home/claude/.claude/upgrade-marker)" = upgrade-marker || { echo "login volume did not survive the upgrade"; exit 1; }
+          sleep 10
+          scripts/doctor.sh --live
+
+  # Summary job for the ruleset's required check: one name that implies all of
+  # the above passed.
+  ci:
+    needs: [leak-check, lint, build-and-smoke, overlay-template, host-uninstall, upgrade]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ok

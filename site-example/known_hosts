@@ -1,0 +1,10 @@
+# Pinned SSH host key(s) for FORGE_SSH_HOST, in known_hosts format with the port:
+#   [git.example.internal]:22 ssh-ed25519 AAAA...
+# Generate with:  ssh-keyscan -p <port> <host> | sed 's/^[^ ]*/[<host>]:<port>/'
+# and verify the fingerprint out of band before committing. Host keys are public;
+# committing them removes the trust-on-first-use window. Empty = SSH refused.
+#
+# The line below is a SYNTHETIC key for the example forge name in site.conf, so the
+# example boots with pinning active and scripts/smoke.sh can prove the fail-closed
+# SSH config. No host answers to it. Replace it with your forge's real key(s).
+[git.example.internal]:22 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOt3TZNSTJVVwDwGs77+tytNLLXe1Jv1ey4fSSxSPiy

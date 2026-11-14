@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "description": "A thin overlay: the image, its base images, the CLI pin and the linters live in the upstream/ submodule and are updated there under upstream's own policy. The dependencies here are the submodule pin and the workflow's actions.",
+  "git-submodules": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "An upstream bump is a new image build and a container recreate on deploy, which drops Remote Control and may need a /login. A person merges it when at a keyboard; validate refuses a pin that is not a release tag.",
+      "matchManagers": [
+        "git-submodules"
+      ],
+      "automerge": false,
+      "labels": [
+        "manual-merge"
+      ]
+    }
+  ]
+}

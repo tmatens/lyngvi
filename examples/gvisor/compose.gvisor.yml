@@ -1,0 +1,35 @@
+# Opt-in: run the agent under gVisor (runsc) instead of runc (docs/GVISOR.md).
+#
+# The agent's syscalls then go to gVisor's user-space kernel, not the host's, so a kernel
+# exploit reachable from inside the container meets gVisor first (DESIGN.md §11). The
+# sidecars stay on runc: the agent is the container that runs untrusted code.
+#
+# Needs the host set up first (docs/GVISOR.md): runsc installed and registered with Docker
+# as runtime `runsc`, with runtimeArgs ["--host-uds=open"] so the agent can reach the key
+# sidecar's socket on the shared volume.
+#
+# Use:  docker compose -f docker-compose.yml -f examples/gvisor/compose.gvisor.yml up -d
+# (an overlay adds this file to its own -f list, or copies its contents into its override).
+#
+# WHY THE FIXED ADDRESSES. gVisor's network stack cannot reach Docker's embedded DNS
+# server (127.0.0.11) on a user-defined network, so container names do not resolve
+# (gVisor FAQ). The agent needs exactly two names, the proxy and the relay; everything
+# else it reaches through the proxy, which resolves names itself. So those two get fixed
+# addresses on the agent-facing network, and the agent gets them as /etc/hosts entries.
+# The addresses must sit in lyngvi-proxy-net's subnet: if an overlay changes that subnet,
+# change them with it.
+services:
+  lyngvi:
+    runtime: runsc
+    extra_hosts:
+      - "lyngvi-proxy:172.31.241.10"
+      - "lyngvi-relay:172.31.241.11"
+  lyngvi-proxy:
+    networks:
+      lyngvi-proxy-net:
+        ipv4_address: 172.31.241.10
+      lyngvi-proxy-out: {}
+  lyngvi-relay:
+    networks:
+      lyngvi-proxy-net:
+        ipv4_address: 172.31.241.11

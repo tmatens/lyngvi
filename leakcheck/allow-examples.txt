@@ -1,0 +1,16 @@
+# Documented EXAMPLE values in this repo (not a real deployment): private-range
+# addresses, and the synthetic SSH host key in site-example/known_hosts. Anything
+# else matching RFC1918 or an SSH public key fails the check.
+172.31.240.0/24
+172.31.241.0/24
+172.31.242.0/24
+10.231.0.0/24
+10.231.1.0/24
+10.231.2.0/24
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+172.31.240.1
+172.31.241.10
+172.31.241.11
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFOt3TZNSTJVVwDwGs77+tytNLLXe1Jv1ey4fSSxSPiy

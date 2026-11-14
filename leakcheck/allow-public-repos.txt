@@ -1,0 +1,4 @@
+# Public repo slugs whose issue/PR refs may appear as owner/repo#123.
+anthropics/claude-code#
+tmatens/lyngvi#
+tmatens/compose-lint#

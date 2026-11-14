@@ -1,0 +1,116 @@
+# compose.yaml — my-station: a private overlay of lyngvi (upstream/ submodule at a tag).
+#
+# Every service EXTENDS upstream's definitions, so every hardening line (cap_drop,
+# no-new-privileges, noexec /tmp, limits, restart policy, healthchecks) comes from
+# upstream/docker-compose.yml and is never repeated here. This file carries only
+# what is this site's: the project and container names, the site build context and
+# build args, the site env files, and the subnets.
+# Run: docker compose up -d --build   (no -f flags: this is the project file)
+name: my-station
+
+services:
+  lyngvi:
+    extends:
+      file: upstream/docker-compose.yml
+      service: lyngvi
+    # Keep CONTAINER_NAME in site/site.conf equal to this: doctor.sh and the
+    # entrypoint's log hints find the container by that name.
+    container_name: lyngvi
+    build:
+      context: ./upstream
+      additional_contexts:
+        site: ./site                 # replaces upstream's site-example/ at build time
+      args:
+        WITH_GO: "0"                 # "1" if the site's repos need the Go toolchain
+        WITH_FORGEJO_MCP: "1"        # "1" when FORGE_KIND=forgejo in site/site.conf
+        WITH_GITHUB_MCP: "1"         # "1" if the agent works on GitHub (needs GITHUB_TOKEN)
+    # `!override` REPLACES upstream's env_file list; a plain list would be appended to
+    # it, loading site-example/site.conf before yours (docs/OVERLAY.md).
+    env_file: !override
+      - path: ./site/site.conf       # non-secret runtime values
+      - path: ./.env                 # secrets, produced on the host; never committed
+        required: false
+    networks: !override
+      - lyngvi-net
+      - lyngvi-proxy-net
+      # Add a site network here (e.g. one shared with a co-hosted forge) and declare
+      # it below as external. It MUST be created with --internal and
+      # -o com.docker.network.bridge.gateway_mode_ipv4=isolated, or the agent gains a
+      # route out; upstream/scripts/doctor.sh --live checks the live bridge.
+
+  # The SSH keys' ssh-agent (upstream keys/start.sh): no network, socket only.
+  lyngvi-keys:
+    extends:
+      file: upstream/docker-compose.yml
+      service: lyngvi-keys
+    build:
+      context: ./upstream
+      dockerfile: keys/Dockerfile
+    env_file: !override
+      - path: ./.env                 # the same secrets file; only the SSH keys are used here
+        required: false
+
+  # The API tokens, added to the agent's API calls (upstream relay/start.sh).
+  lyngvi-relay:
+    extends:
+      file: upstream/docker-compose.yml
+      service: lyngvi-relay
+    build:
+      context: ./upstream
+      dockerfile: relay/Dockerfile
+    env_file: !override
+      - path: ./site/site.conf       # FORGE_KIND, FORGE_API_BASE
+      - path: ./.env                 # the tokens
+        required: false
+
+  lyngvi-proxy:
+    extends:
+      file: upstream/docker-compose.yml
+      service: lyngvi-proxy
+    build:
+      context: ./upstream
+      dockerfile: proxy/Dockerfile
+      additional_contexts:
+        site: ./site                 # appends site/proxy-filter.extra to the allowlist
+      args:
+        PROXY_PRESETS: ""            # "go" if WITH_GO is "1" above (proxy/presets/)
+    networks: !override
+      - lyngvi-proxy-net
+      - lyngvi-proxy-out
+
+# `name:` on every managed network, or compose names them <project>_<key> and treats
+# the live bridges as orphans. The agent's networks are `internal` with an isolated
+# gateway: no route, no host address, no resolver — the proxy is its only path
+# (upstream/DESIGN.md §4.2). Change subnets here only.
+networks:
+  lyngvi-net:
+    name: lyngvi-net
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
+  lyngvi-proxy-net:
+    name: lyngvi-proxy-net
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.31.241.0/24
+  lyngvi-proxy-out:
+    name: lyngvi-proxy-out
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.242.0/24
+
+volumes:
+  workspace:
+  canary:        # decoy hostnames, no secrets (upstream proxy/start.sh)
+  cache:         # build caches, disposable, no secrets
+  keys:          # the key sidecar's socket and public keys only
+  claude-home:   # secret-bearing (the OAuth login) — upstream/DESIGN.md §5

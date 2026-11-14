@@ -1,0 +1,25 @@
+# Destination allowlist for the egress proxy (extended regex, anchored). Matched
+# against the requested host (HTTP) or CONNECT host (HTTPS, SSH tunnels).
+#
+# This proxy is the agent's ONLY path out: its networks are `internal` with no
+# gateway (docker-compose.yml), so a host that is not listed here is unreachable,
+# not merely filtered. One line, one reason. Site additions go in
+# site/proxy-filter.extra, appended at build; the forge and the notification push
+# host belong there, not here.
+#
+# The Anthropic relay: model requests, feature flags, Remote Control.
+^api\.anthropic\.com$
+# claude.ai account login and the OAuth token exchange/refresh behind it
+# (code.claude.com/docs/en/network-config). The refresh runs monthly without
+# a human; blocking platform.claude.com makes the credential die silently.
+^claude\.ai$
+^platform\.claude\.com$
+# GitHub: git over HTTPS and SSH (CONNECT :22), the REST API, Actions checks.
+^github\.com$
+^api\.github\.com$
+# Package registries. PyPI and npm are CDN-fronted with rotating IPs, which
+# is why hostname matching is the control here.
+^pypi\.org$
+^files\.pythonhosted\.org$
+^[a-z0-9.-]+\.pythonhosted\.org$
+^registry\.npmjs\.org$

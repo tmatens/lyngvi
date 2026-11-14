@@ -1,0 +1,299 @@
+name: lyngvi
+
+# Runs as-is with the example site values (site-example/). A real deployment
+# consumes this file unchanged from an overlay repo and layers its own values via
+# compose.override.yml + a site/ directory — see docs/OVERLAY.md and
+# examples/overlay/.
+
+services:
+  lyngvi:
+    build:
+      context: .
+      # Site files reach the image through a BuildKit named context, never a bind
+      # mount. The overlay points `site` at its own directory.
+      additional_contexts:
+        site: ./site-example
+      args:
+        WITH_PYTHON: "1"
+        WITH_LINTERS: "1"
+        WITH_GO: "0"
+        WITH_FORGEJO_MCP: "0"
+        WITH_GITHUB_MCP: "1"          # GitHub's MCP server, registered when GITHUB_TOKEN is set
+    container_name: lyngvi
+    # Every network action the agent takes at start (skills clone, forge host key,
+    # Remote Control) goes through the proxy, so `compose up` starts it only once the
+    # proxy is healthy. An overlay that renames the proxy service overrides this with
+    # `depends_on: !override` naming its own (docs/OVERLAY.md); `extends` carries it.
+    # The daemon ignores depends_on when it restarts containers itself (reboot, daemon
+    # restart), so the entrypoint also waits for the proxy before its first network use.
+    depends_on:
+      lyngvi-proxy:
+        condition: service_healthy
+      # The SSH keys live in the key sidecar; the agent signs and pushes through its socket.
+      lyngvi-keys:
+        condition: service_healthy
+      # The API tokens live in the relay; the agent's clients go through it.
+      lyngvi-relay:
+        condition: service_healthy
+    # Tier-0 hardening (DESIGN.md). No docker.sock, no host mounts, no host
+    # ports — Remote Control is outbound-only.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # NOTE: egress default-deny is a property of the networks below (internal, no
+    # gateway address) plus the proxy's hostname allowlist — nothing is enforced
+    # inside the container, so cap_drop:[ALL] stays and nothing can be undone from
+    # inside. No host firewall is needed (DESIGN.md §4.2).
+    # Harden /tmp: noexec (drop-and-exec defense), nosuid, nodev. Applies to /tmp
+    # ONLY — the workspace/.claude named volumes stay exec-able (the agent builds
+    # there). Interpreter use (`bash /tmp/x.sh`) is unaffected; only direct
+    # execution of a binary dropped in /tmp is blocked.
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev
+      # The home directory: what the entrypoint writes at every start (~/.ssh,
+      # ~/.gitconfig, the decoys). Rebuilt each start, so nothing written there
+      # outlives a restart, and noexec like /tmp: what the agent builds and runs lives
+      # in the volumes mounted inside it (workspace, and ~/.cache for `go install`).
+      # TMPDIR is on the workspace volume too (Dockerfile), not here.
+      - /home/claude:uid=10001,gid=10001,mode=0700,size=64m,noexec,nosuid,nodev
+    # The image is read-only: the agent's writable state is exactly the tmpfs mounts
+    # above and the volumes below (DESIGN.md §4.1).
+    read_only: true
+    # Bound blast radius / runaway builds. Honored by `docker compose up`
+    # (Compose v2). NOTE: keep pids under deploy.resources.limits — setting BOTH
+    # this and a top-level `pids_limit` makes compose reject the project.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+          pids: 512
+        reservations:
+          memory: 512M
+    environment:
+      # Every client goes through the proxy sidecar by hostname: the networks below
+      # have no gateway and no resolver, so there is no other path (DESIGN.md §4.2).
+      # The CLI, git and ssh (via agent/connect.mjs) read HTTPS_PROXY; NODE_USE_ENV_PROXY
+      # makes node's fetch/https honour it too (notify.mjs, the forge MCP adapter).
+      - HTTPS_PROXY=http://lyngvi-proxy:3128
+      - HTTP_PROXY=http://lyngvi-proxy:3128
+      - NO_PROXY=localhost,127.0.0.1,::1,lyngvi-relay
+      - NODE_USE_ENV_PROXY=1
+      # Keep ALL Claude config in the persisted volume. By default the main config
+      # (~/.claude.json) lives BESIDE ~/.claude and would be lost on recreate,
+      # breaking login/org detection. Pointing CLAUDE_CONFIG_DIR at the volume
+      # (where .credentials.json + settings.json already are) makes it durable.
+      - CLAUDE_CONFIG_DIR=/home/claude/.claude
+      # The private key goes to the key sidecar, never here: this blanks the value the
+      # secrets file below would otherwise put in the agent's environment. A site with
+      # extra SSH_KEY_<NAME>_B64 keys blanks each the same way; doctor fails if one is set.
+      - GIT_SSH_KEY_B64=
+      # Likewise the API tokens: they go to the token relay, never here.
+      - GITHUB_TOKEN=
+      - FORGE_API_TOKEN=
+      - LYNGVI_ANTHROPIC_API_KEY=          # api-key mode's key, for the relay only (docs/API_KEY_MODE.md)
+      # Do NOT set DISABLE_TELEMETRY / CLAUDE_CODE_USE_BEDROCK|VERTEX|FOUNDRY —
+      # they disable Remote Control eligibility (DESIGN.md).
+    env_file:
+      # Non-secret site values (identity, forge host, skills). The overlay replaces
+      # this entry with its own site/site.conf.
+      - path: ./site-example/site.conf
+      # Secrets. Produced on the host by whatever secrets mechanism the site uses
+      # (SOPS, a vault agent, a 0600 file written by hand); absent locally/CI.
+      - path: .env
+        required: false
+    volumes:
+      - workspace:/home/claude/workspace
+      - claude-home:/home/claude/.claude   # secret-bearing (OAuth) — see DESIGN.md
+      - canary:/etc/lyngvi/canary:ro       # decoy hostnames the proxy generated (DESIGN.md §10)
+      - cache:/home/claude/.cache          # build caches (Go, npm, uv, pip): disposable, no secrets
+      - keys:/run/lyngvi-keys:ro           # the key sidecar's ssh-agent socket + public keys
+    networks:
+      # Both are `internal` with an isolated gateway (declared below): the agent
+      # can reach the proxy and nothing else — not the host, the LAN, other
+      # containers or the internet. There is no apply step and no window.
+      - lyngvi-net
+      - lyngvi-proxy-net
+    # unless-stopped: on the network layout above the restart policy carries no
+    # egress risk — the container comes back on its isolated networks, with the proxy
+    # as its only path, whether the daemon or an operator starts it. (Up to v0.3.x it
+    # was "no" for the old host firewall path; a host that still has its units runs
+    # host/uninstall.sh first — host/README.md.)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Hostname-allowlist forward proxy: the ONLY runtime path from the Tier-0 agent
+  # to package registries (DESIGN.md, egress). It filters by destination host
+  # (incl. HTTPS CONNECT) — which an L3/L4 host firewall cannot — sidestepping
+  # CDN IP rotation. Same Tier-0 hardening as the agent; holds no secrets.
+  # The SSH keys, held in an ssh-agent that serves only its socket (keys/start.sh). No
+  # network at all, so nothing in it can send a key anywhere; the agent gets the socket
+  # and the public keys on the `keys` volume, never a private key.
+  lyngvi-keys:
+    build:
+      context: .
+      dockerfile: keys/Dockerfile
+    container_name: lyngvi-keys
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,uid=10001,gid=10001,mode=0700
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - keys:/run/lyngvi-keys
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+          pids: 16
+    restart: unless-stopped
+    healthcheck:
+      # ssh-add exits 2 only when it cannot reach the agent; 1 = reachable, no keys.
+      test: ["CMD-SHELL", "SSH_AUTH_SOCK=/run/lyngvi-keys/agent.sock ssh-add -l >/dev/null 2>&1; [ $$? -ne 2 ]"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
+
+  # The API tokens, added to the agent's API calls on the way out (relay/start.sh). The
+  # agent's clients speak plain HTTP to it on the internal proxy network; it calls the
+  # real HTTPS API through lyngvi-proxy, adding the token and refusing a short list of
+  # endpoints (webhooks, keys, mirrors, collaborators, secrets, token creation).
+  lyngvi-relay:
+    build:
+      context: .
+      dockerfile: relay/Dockerfile
+    container_name: lyngvi-relay
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,uid=10003,gid=10003,mode=0700
+    env_file:
+      - path: ./site-example/site.conf    # FORGE_KIND, FORGE_API_BASE
+      - path: .env                         # the tokens
+        required: false
+    networks:
+      - lyngvi-proxy-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+          pids: 64
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pidof", "caddy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
+
+  lyngvi-proxy:
+    build:
+      # Root context so the stub `site` stage can read site-example/; the
+      # Dockerfile lives under proxy/.
+      context: .
+      dockerfile: proxy/Dockerfile
+      additional_contexts:
+        site: ./site-example
+      args:
+        # Opt-in allowlist groups (proxy/presets/): "go" when the agent has WITH_GO "1".
+        PROXY_PRESETS: ""
+    container_name: lyngvi-proxy
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+    volumes:
+      # Per-install decoy hostnames: written once here, read-only in the agent, which
+      # plants decoy credentials naming them. A refusal of one raises CANARY_TOUCHED in
+      # THIS container's log, where the agent cannot write (proxy/start.sh).
+      - canary:/canary
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+          pids: 64
+    networks:
+      # lyngvi-proxy-net (internal, isolated) faces the agent; lyngvi-proxy-out is
+      # the proxy's own internet path and the stack's only non-internal network.
+      # The tinyproxy allowlist is the egress control; it holds no secrets.
+      - lyngvi-proxy-net
+      - lyngvi-proxy-out
+    restart: unless-stopped
+    # Liveness only: a through-proxy probe would be refused by the client Allow
+    # rule, so check the process is up.
+    healthcheck:
+      test: ["CMD", "pidof", "tinyproxy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Probe every 2s while starting, so the agent's depends_on clears in seconds
+      # instead of waiting a full 30s interval for the first check.
+      start_period: 20s
+      start_interval: 2s
+
+networks:
+  # The egress control is this layout, not a rule set (DESIGN.md §4.2):
+  #   internal: true   → Docker never forwards or NATs the subnet anywhere.
+  #   gateway_mode_ipv4: isolated → the bridge gets NO host address, so the host
+  #                      itself (and any service bound to 0.0.0.0) is unreachable,
+  #                      and there is no resolver: names resolve only at the proxy.
+  # Both need Docker Engine >= 28.0; an older engine refuses to create the network,
+  # which is the correct failure (fail closed). Fixed subnets so an overlay can
+  # change them deliberately; `name:` so compose reuses the live bridges.
+  lyngvi-net:
+    name: lyngvi-net
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
+
+  # Agent <-> proxy only, same properties.
+  lyngvi-proxy-net:
+    name: lyngvi-proxy-net
+    driver: bridge
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    ipam:
+      config:
+        - subnet: 172.31.241.0/24
+
+  # The proxy's own egress: the one network with a gateway. The agent is not on it.
+  lyngvi-proxy-out:
+    name: lyngvi-proxy-out
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.242.0/24
+volumes:
+  workspace:
+  canary:        # decoy hostnames, no secrets (proxy/start.sh)
+  cache:         # build caches, disposable, no secrets
+  keys:          # the key sidecar's socket and PUBLIC keys only
+  claude-home:

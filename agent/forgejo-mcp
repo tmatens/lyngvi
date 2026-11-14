@@ -1,0 +1,29 @@
+#!/bin/sh
+# forgejo-mcp launcher (optional forge adapter, baked when WITH_FORGEJO_MCP=1) —
+# maps the container's credentials onto the server's expected env. FORGEJO_URL must be the BARE origin: the server
+# appends /api/v1 itself, so reusing $FORGEJO_API_BASE verbatim would produce
+# /api/v1/api/v1 and 404 every call. Token stays env-only (never argv/disk).
+# Server: ric_harvey/forgejo-mcp, pinned by commit in the Dockerfile.
+set -eu
+
+# In a lyngvi stack the token is in the token relay (relay/start.sh), never here: the
+# server talks to the relay, which adds the token and refuses the endpoints the agent
+# must not reach. The placeholder below satisfies the server and is replaced on the way out.
+if [ -n "${LYNGVI_RELAY_FORGE:-}" ]; then
+  export FORGEJO_URL="$LYNGVI_RELAY_FORGE"
+  export FORGEJO_TOKEN="added-by-the-lyngvi-relay"
+else
+  : "${FORGE_API_TOKEN:?no relay route (LYNGVI_RELAY_FORGE) and no FORGE_API_TOKEN — cannot start forgejo-mcp}"
+  : "${FORGE_API_BASE:?FORGE_API_BASE not set — cannot start forgejo-mcp}"
+  # strip a trailing /api/v1 (the server appends it)
+  export FORGEJO_URL="${FORGE_API_BASE%/api/v1}"
+  export FORGEJO_TOKEN="$FORGE_API_TOKEN"
+fi
+# Tool areas switched off unless the site says otherwise (site.conf). admin is
+# instance administration, which an agent never needs. repo-settings holds push
+# mirrors, webhooks and migrations: the FORGE makes those connections, not this
+# container, so they bypass the egress proxy entirely. Unset = this default;
+# set but empty = every area on. The token's scopes are the real control: the
+# agent can reach the API without this server.
+export FORGEJO_DISABLED_AREAS="${FORGEJO_DISABLED_AREAS-admin,repo-settings}"
+exec node /opt/forgejo-mcp/dist/index.js

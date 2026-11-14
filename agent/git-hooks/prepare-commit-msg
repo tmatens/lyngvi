@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# DCO: append Signed-off-by (matching author) if absent. $1 = commit message file.
+# Baked into the image (root-owned, read-only to the agent) and enabled by the
+# entrypoint's global core.hooksPath; GIT_DCO_SIGNOFF=0 in site.conf turns it off.
+# shellcheck disable=SC1091  # the baked path; _identity.sh is linted on its own
+. /etc/lyngvi/git-hooks/_identity.sh
+[ "$(site_conf_value GIT_DCO_SIGNOFF)" = 0 ] && exit 0
+sob="Signed-off-by: $(git config user.name) <$(git config user.email)>"
+grep -qiF "$sob" "$1" 2>/dev/null || \
+  git interpret-trailers --in-place --if-exists addIfDifferent --trailer "$sob" "$1"

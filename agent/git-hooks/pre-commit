@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Refuse a commit whose author or committer is not one of the site's identities
+# (site/site.conf GIT_AUTHOR_NAME/EMAIL, or a user.* in a site/gitconfig* fragment).
+# Something overriding it — GIT_AUTHOR_*/GIT_COMMITTER_* in the environment, a
+# `git -c user.*`, a repo-local user.* — would otherwise publish under a name the
+# site never chose, and a forge's squash merge turns that into a co-author line.
+# Baked into the image (root-owned) and enabled by the entrypoint's global
+# core.hooksPath. `--no-verify` skips it: CI checks commit identities too.
+# shellcheck disable=SC1091  # the baked path; _identity.sh is linted on its own
+. /etc/lyngvi/git-hooks/_identity.sh
+for who in AUTHOR COMMITTER; do
+  ident=$(git var "GIT_${who}_IDENT" 2>/dev/null) || continue
+  split_ident "$ident"
+  if ! ident_allowed "$IDENT_NAME" "$IDENT_EMAIL"; then
+    lc=$(printf '%s' "$who" | tr '[:upper:]' '[:lower:]')
+    echo "lyngvi: commit refused — the $lc identity ($IDENT_NAME <$IDENT_EMAIL>) is not one the site declares." >&2
+    echo "  The site's identity comes from site/site.conf (and user.* in site/gitconfig*). Something overrides it:" >&2
+    echo "  GIT_${who}_NAME/EMAIL in the environment, git -c user.*, or a repo-local user.*. Report it; don't commit around it." >&2
+    exit 1
+  fi
+done
+exit 0

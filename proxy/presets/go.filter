@@ -1,0 +1,11 @@
+# Preset `go` (PROXY_PRESETS=go): the Go module proxy and checksum database, which
+# `go mod download`, `go get` and toolchain switching use with Go's defaults
+# (GOPROXY=https://proxy.golang.org,direct, GOSUMDB=sum.golang.org).
+#
+# Opt-in, not in the base list, because the Go module proxy fetches any public
+# module path from its origin on request: a module path the agent chooses becomes a
+# request to a host the agent chooses, made by Google's proxy instead of this one.
+# Turn it on when the site's repos need Go (WITH_GO=1); doctor.sh warns when the two
+# disagree.
+^proxy\.golang\.org$
+^sum\.golang\.org$

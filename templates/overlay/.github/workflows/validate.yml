@@ -1,0 +1,37 @@
+name: validate
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Required status check on main: what the host will run is exactly what was reviewed.
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true          # upstream/ — a private upstream needs a read token here (token:)
+      - name: upstream is pinned to a release tag
+        # Never patched in place, never floating on a branch: the gitlink must be
+        # exactly a vX.Y.Z tag. A temporary hotfix pin edits this step in the same PR,
+        # with an issue tracking the revert.
+        run: |
+          git -C upstream fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+          git -C upstream describe --exact-match --tags --match 'v*'
+      - name: doctor — site files, site.conf, known_hosts pin, the proxy allowlist, the compose egress layout
+        run: upstream/scripts/doctor.sh
+      - name: compose-lint (the merged stack — upstream services + this overlay)
+        uses: tmatens/compose-lint@07041a0807805b1bb134c4c83efad61fe8abb7b5 # v1.2.0
+        with:
+          files: compose.yaml
+          fail-on: low
+      - name: no private string in upstream, no secret in site/
+        run: |
+          python3 -I upstream/scripts/check-site-leaks.py --root upstream --plaintext leakcheck/denylist.txt
+          if grep -rEl '^(GIT_SSH_KEY_B64|GITHUB_TOKEN|FORGE_API_TOKEN|NOTIFY_TOKEN|SSH_KEY_[A-Z0-9_]+_B64|GIT_HTTPS_CREDENTIAL_[A-Z0-9_]+)=.+' site/; then
+            echo "a secret-named key has a value under site/ — secrets belong in .env on the host"; exit 1
+          fi

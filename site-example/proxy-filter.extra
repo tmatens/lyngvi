@@ -1,0 +1,26 @@
+# Site additions to proxy/filter — one hostname pattern per line, one reason each.
+# Appended to the upstream filter at build time (proxy/Dockerfile, named context `site`).
+# Each line is ^...$ built from a-z 0-9 - \. and, for a rotating label, [a-z0-9.-]+
+# followed by at least two literal labels; anything else (|, (), *, a bare dot) fails
+# the proxy build and scripts/doctor.sh, because one regex can allow every host
+# (proxy/check-filter.sh has the grammar).
+# The proxy is the agent's only path out, so this file IS the site's egress policy:
+# the forge (SSH and API), the notification push host, anything else the site's
+# work needs. Upstream already lists the relay, claude.ai, platform.claude.com,
+# github.com, api.github.com and the registries. Examples, commented out:
+#
+# A self-hosted forge (site.conf FORGE_SSH_HOST / FORGE_API_BASE):
+^git\.example\.internal$
+#
+# The notification push host (site.conf NOTIFY_URL):
+#^ntfy\.example\.org$
+#
+# GitHub Actions RAW LOG blob storage: `GET api.github.com/.../jobs/{id}/logs` 302s to a
+# rotating Azure blob account; the CONNECT host is stable, so filter here, not at L3/L4.
+# Wider co-tenant surface than the registries above (shared Actions-results storage) and
+# tinyproxy matches the CONNECT host, not SNI — a bounded covert-egress channel. Used by
+# scripts/gh-actions-log.mjs.
+#^productionresultssa[0-9]+\.blob\.core\.windows\.net$
+#
+# Docker Hub web/API for a read-only post-release spot-check (not an image pull path):
+#^hub\.docker\.com$

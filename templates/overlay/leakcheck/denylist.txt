@@ -1,0 +1,6 @@
+# Private strings that must never reach upstream — one per line, # comments allowed:
+# hostnames, internal addresses, account and repo names, the forge's domain, the
+# secrets-backend recipient. This plaintext list lives ONLY here. `validate` runs
+# upstream's leak check over the submodule with it before anything can be pushed
+# upstream. Do not publish hashes of these strings in its place: a short token is
+# recovered from its hash by guessing, salt or no salt.

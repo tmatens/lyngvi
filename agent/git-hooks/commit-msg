@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# $1 = the commit message file. Refuse:
+#  - a Signed-off-by from anyone but the site's identities (the DCO trailer is the
+#    site's certification; another name there is someone else's);
+#  - AI attribution (assistant co-author trailer, session trailer or link,
+#    "Generated with" footer) when the site sets GIT_NO_AI_ATTRIBUTION=1.
+# Baked into the image and enabled by the entrypoint's global core.hooksPath.
+# shellcheck disable=SC1091  # the baked path; _identity.sh is linted on its own
+. /etc/lyngvi/git-hooks/_identity.sh
+msg="$1"; bad=0
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  split_ident "${line#*: }"
+  if ! ident_allowed "$IDENT_NAME" "$IDENT_EMAIL"; then
+    echo "lyngvi: commit refused — a Signed-off-by names $IDENT_NAME <$IDENT_EMAIL>, not one of the site's identities." >&2
+    bad=1
+  fi
+done < <(grep -v '^#' "$msg" | git interpret-trailers --parse | grep -i '^signed-off-by: ')
+if [ "$(site_conf_value GIT_NO_AI_ATTRIBUTION)" = 1 ] \
+   && grep -v '^#' "$msg" | grep -qiE '^[[:space:]]*co-authored-by:.*(claude|anthropic)|^[[:space:]]*claude-session:|claude\.ai/code/session|generated (with|by) \[?(claude|anthropic)'; then
+  echo "lyngvi: commit refused — the message carries AI attribution, and the site sets GIT_NO_AI_ATTRIBUTION=1." >&2
+  bad=1
+fi
+exit "$bad"

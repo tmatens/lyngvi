@@ -1,0 +1,5 @@
+# Site additions to proxy/tinyproxy.conf, appended at build (proxy/Dockerfile, named
+# context `site`). Upstream allows CONNECT to ports 443 and 22 on allowlisted hosts;
+# a forge on another SSH port adds it here, one line, one reason:
+#
+#ConnectPort 2222

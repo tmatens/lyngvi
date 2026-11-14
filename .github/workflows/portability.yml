@@ -1,0 +1,84 @@
+name: portability
+
+# The two claims the docs make beyond "Docker Engine >= 28 on amd64": the egress layout
+# holds on a ROOTLESS engine, and the images build and run on arm64. Both are slower and
+# more environment-dependent than the main CI, so they run here — on changes to the image
+# or the stack, weekly, and on demand — instead of gating every PR. A red run here is a
+# regression in a documented claim: fix it or change the claim.
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - proxy/**
+      - docker-compose.yml
+      - entrypoint.sh
+      - scripts/smoke.sh
+      - scripts/doctor.sh
+      - .github/workflows/portability.yml
+  schedule:
+    - cron: '17 6 * * 1' # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The whole stack on a rootless Docker engine: build, smoke (supervisor, settings,
+  # signing, host-key pin, proxy default-deny) and the live doctor (no default route, no
+  # resolver, egress probes blocked except via the proxy). The engine is Docker's official
+  # dind-rootless image, pinned like every other dependency, run on the runner's own
+  # engine; every step after it talks to the rootless engine through DOCKER_HOST.
+  rootless:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: start a rootless Docker engine
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, which
+        # rootlesskit needs ("fork/exec /proc/self/exe: operation not permitted"); lifting
+        # it is the documented prerequisite for rootless Docker on such hosts. The runner
+        # is ephemeral.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          docker run -d --name rootless --privileged -e DOCKER_TLS_CERTDIR= -p 127.0.0.1:2375:2375 docker:29.9.3-dind-rootless@sha256:e3d0fa70055956693134873845b743bbe35b5199c68a52347032ae3e5dbac9a0
+          for _ in $(seq 1 60); do docker -H tcp://127.0.0.1:2375 info >/dev/null 2>&1 && break; sleep 2; done
+          echo "DOCKER_HOST=tcp://127.0.0.1:2375" >> "$GITHUB_ENV"
+      - name: the engine is rootless
+        run: |
+          docker version --format 'engine {{.Server.Version}}'
+          docker info --format '{{json .SecurityOptions}}' | grep -q rootless
+      - name: build, smoke and the live doctor on the rootless engine
+        run: |
+          docker compose build -q
+          KEEP=1 scripts/smoke.sh
+          scripts/doctor.sh --live
+      - name: engine log on failure
+        if: failure()
+        env:
+          DOCKER_HOST: ""
+        run: docker logs --tail 60 rootless
+
+  # Both images for linux/arm64 under emulation, then a run of the agent image's toolchain.
+  # Every base and tool image is pinned to a multi-platform index digest, so no step is
+  # architecture-specific; this keeps it that way.
+  arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build the stack for linux/arm64
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/arm64
+        run: docker compose build
+      - name: the arm64 agent image runs its toolchain
+        run: |
+          docker image inspect --format '{{.Architecture}}' lyngvi-lyngvi | grep -qx arm64
+          docker image inspect --format '{{.Architecture}}' lyngvi-lyngvi-proxy | grep -qx arm64
+          docker run --rm --platform linux/arm64 --entrypoint sh lyngvi-lyngvi -c \
+            'uname -m && node --version && claude --version && gitleaks version && git --version'

@@ -1,0 +1,6 @@
+# Secrets are produced on the host and never committed (upstream/.env.example has the names).
+.env
+*.env
+*.key
+*.pem
+__pycache__/

@@ -1,0 +1,4 @@
+rules:
+  CL-0007:
+    enabled: false
+    reason: "The agent must write to its workspace and ~/.claude (named volumes); /tmp is tmpfs. A read-only rootfs is impractical for an interactive coding agent."
