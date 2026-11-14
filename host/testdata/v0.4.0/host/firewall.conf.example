@@ -1,0 +1,26 @@
+# /etc/lyngvi/firewall.conf — read by host/lyngvi-firewall.sh (EnvironmentFile= in
+# the unit). Copy this file there, as root, mode 0644, and edit the values to
+# match compose.override.yml. Every value here is NON-secret.
+
+# The agent's bridge subnet (docker-compose.yml lyngvi-net). REQUIRED.
+LYNGVI_SUBNET=172.31.240.0/24
+# Every subnet the agent container is attached to, space-separated: the agent
+# net, the internal proxy net, the proxy's egress net, and any site-added
+# internal net. Each gets a container->host INPUT drop and the v6 guard.
+LYNGVI_SUBNETS="172.31.240.0/24 172.31.241.0/24 172.31.242.0/24"
+# Internal resolver the agent subnet may reach on :53. Leave EMPTY when the
+# container uses Docker's embedded DNS (127.0.0.11) — then upstream queries
+# egress from the host netns and no rule is needed. If the container resolves
+# straight at an IP, that IP must be listed or DNS fails closed.
+DNS_RESOLVER=
+# Hosts allowed on :443 by resolved IP (point-in-time; the timer refreshes).
+# The Anthropic relay is the one required entry; the notification push host
+# (site.conf NOTIFY_URL), if any, is the usual second. Do NOT add registries here
+# (they ride the proxy sidecar) and do NOT add analytics hosts.
+ALLOW_443_HOSTS="api.anthropic.com"
+# 1 = allow GitHub's published web/api/git CIDRs on :443 (fetched live).
+GITHUB_META=1
+# A self-hosted forge reached over SSH. Empty = no rule. Matched on the
+# pre-DNAT destination, so a forge published as a Docker port on this host works.
+FORGE_SSH_HOST=
+FORGE_SSH_PORT=22

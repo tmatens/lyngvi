@@ -1,0 +1,23 @@
+[Unit]
+Description=lyngvi egress firewall (default-deny allowlist for the agent subnet)
+Documentation=https://github.com/tmatens/lyngvi/blob/main/host/HOST_SETUP.md
+# Run after Docker is up (it rebuilds DOCKER-USER on restart, flushing our jump),
+# and after the network is online (the script resolves hosts + fetches GitHub CIDRs).
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+# Re-apply whenever Docker restarts (a docker restart clears the rules).
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# systemd gives a minimal PATH; iptables/ip live in /usr/sbin.
+Environment=PATH=/usr/sbin:/sbin:/usr/bin:/bin
+EnvironmentFile=/etc/lyngvi/firewall.conf
+# Root-owned copy of the script — decoupled from any git clone on purpose
+# (HOST_SETUP.md: nothing the agent or a pipeline can write is executed as root).
+ExecStart=/usr/local/sbin/lyngvi-firewall.sh
+
+[Install]
+WantedBy=multi-user.target docker.service

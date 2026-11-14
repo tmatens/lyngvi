@@ -1,0 +1,16 @@
+[Unit]
+Description=Re-apply lyngvi egress firewall daily (CDN/GitHub CIDR rotation)
+Documentation=https://github.com/tmatens/lyngvi/blob/main/host/HOST_SETUP.md
+
+[Timer]
+# Relay / GitHub IPs rotate; the script re-fetches them. Daily, with jitter,
+# and catch-up if the box was off (Persistent). The target is the refresh unit,
+# not lyngvi-firewall.service: that one stays active (RemainAfterExit) for the
+# agent unit's Requires=, and starting an active unit runs nothing.
+Unit=lyngvi-firewall-refresh.service
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
