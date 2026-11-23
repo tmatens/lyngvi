@@ -171,7 +171,7 @@ jobs:
         # v0.4.0 has no tag in this repository, so its installer is kept as a fixture.
         run: |
           mkdir -p /tmp/v040 && cp -a host/testdata/v0.4.0/. /tmp/v040/
-          docker run -d --name my-station alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a sleep infinity
+          docker run -d --name my-station alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf sleep infinity
           sudo /tmp/v040/host/install.sh --site /tmp/v040/site-example --container my-station
           sudo systemctl start lyngvi-agent.service
           systemctl is-active lyngvi-agent.service lyngvi-firewall.service lyngvi-firewall.timer
